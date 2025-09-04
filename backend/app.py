@@ -2,7 +2,8 @@ from fastapi import FastAPI, Query, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, List
 import pandas as pd
-from test import RestaurantReviewVectorizer  # Assuming your file is named test.py
+from backend.test import RestaurantReviewVectorizer  # Assuming your file is named test.py
+from backend.llm_enhancer import get_llm_enhancer
 
 app = FastAPI(
     title="Restaurant Review Semantic Search API",
@@ -13,9 +14,12 @@ app = FastAPI(
 # Initialize the vectorizer and load collection
 vectorizer = RestaurantReviewVectorizer(
     model_name="all-MiniLM-L6-v2",
-    persist_directory="./restaurant_chroma_db"
+    persist_directory="./backend/restaurant_chroma_db"
 )
 vectorizer.create_or_get_collection("restaurant_reviews")
+
+# Initialize LLM enhancer
+llm_enhancer = get_llm_enhancer()
 
 class SearchRequest(BaseModel):
     query: str
@@ -31,7 +35,15 @@ def search_reviews(request: SearchRequest):
             filters=request.filters,
             include_distances=True
         )
-        return {"results": results}
+        
+        # Enhance results with LLM
+        enhanced_results = llm_enhancer.enhance_search_results(request.query, results)
+        
+        return {
+            "original_results": results,
+            "enhanced_summary": enhanced_results["enhanced_summary"],
+            "llm_model": enhanced_results.get("llm_model", "unknown")
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
