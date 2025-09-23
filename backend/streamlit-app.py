@@ -86,11 +86,11 @@ Rules:
 
 Response format (JSON only):
 {{
-    "needs_more_context": true/false,
-    "follow_up_question": "What's your question?",
-    "missing_info": ["location", "meal_type"],
-    "ready_for_recommendation": true/false,
-    "confidence_level": "low/medium/high"
+"needs_more_context": true/false,
+"follow_up_question": "What's your question?",
+"missing_info": ["location", "meal_type"],
+"ready_for_recommendation": true/false,
+"confidence_level": "low/medium/high"
 }}
 """
 
@@ -166,7 +166,6 @@ class MCPManager:
                     "tools": await self.get_server_tools(client)
                 }
                 st.success(f"Connected to MCP server '{name}'")
-                
             except Exception as e:
                 st.warning(f"Could not connect to MCP server '{name}': {e}")
 
@@ -176,10 +175,8 @@ class MCPManager:
             command=config["command"],
             args=config["args"]
         )
-        
         stdio_transport = await stdio_client(server_params)
         read, write = stdio_transport
-        
         session = ClientSession(read, write)
         await session.initialize()
         return session
@@ -196,7 +193,7 @@ class MCPManager:
         """Call a specific tool on a specific server."""
         if server_name not in self.servers:
             return {"error": f"Server {server_name} not connected"}
-            
+        
         client = self.servers[server_name]["client"]
         try:
             result = await client.call_tool(tool_name, arguments)
@@ -245,7 +242,6 @@ def get_mock_events_data(location: str) -> list:
             "impact": "Many shops closed, street food and malls still open"
         }
     ]
-    
     return [e for e in sample_events if location.lower() in e["location"].lower()]
 
 # ---------------------------- Utilities ----------------------------
@@ -262,7 +258,7 @@ def run_async(coro):
 def clean_json_response(response_text: str) -> str:
     """Extract JSON from fenced code or return raw text if not fenced."""
     if not response_text or not response_text.strip():
-        return "{}"  # Return empty JSON object for empty responses
+        return "{}" # Return empty JSON object for empty responses
     
     # Try to extract from code fence first
     m = re.search(r"``````", response_text, re.DOTALL | re.IGNORECASE)
@@ -277,19 +273,56 @@ def clean_json_response(response_text: str) -> str:
         # If not valid JSON, wrap in a basic structure
         return '{"error": "Invalid JSON response"}'
 
+def clean_recommendation_response(response_text: str) -> str:
+    """Clean the recommendation response to remove prompts and extract only the recommendation."""
+    if not response_text or not response_text.strip():
+        return "Let me think of something good for you!"
+    
+    # Remove any leading prompt text that might have been included
+    # Look for patterns that indicate the start of the actual response
+    patterns = [
+        r"Based on your search for.*?Restaurant search results:.*?\n\n(.+)",
+        r"User context:.*?Be conversational and use Malaysian terms naturally\.\s*(.+)",
+        r"^.*?Guidelines:.*?Start conversations.*?\n\n(.+)",
+        r"^.*?SYSTEM_PROMPT.*?\n\n(.+)",
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, response_text, re.DOTALL | re.IGNORECASE)
+        if match:
+            response_text = match.group(1).strip()
+            break
+    
+    # If the response still contains prompt-like text, try to extract just the recommendation
+    if "User context:" in response_text or "Restaurant search results:" in response_text:
+        # Split by common delimiters and find the most coherent part
+        parts = re.split(r'(?:Restaurant search results:|User context:|Guidelines:|Based on)', response_text)
+        # Take the last substantial part that looks like a recommendation
+        for part in reversed(parts):
+            part = part.strip()
+            if len(part) > 50 and not part.startswith('{') and not part.startswith('['):
+                response_text = part
+                break
+    
+    # Clean up any remaining artifacts
+    response_text = re.sub(r'^[^a-zA-Z]*', '', response_text)  # Remove leading non-letters
+    response_text = re.sub(r'\s+', ' ', response_text)  # Normalize whitespace
+    
+    return response_text.strip() if response_text.strip() else "Let me suggest some great options for you!"
+
 def detect_timezone_and_local_time():
     """Read the browser's IANA timezone and compute local time."""
     try:
         tz_name = getattr(st.context, "timezone", None) # e.g., "Asia/Kuala_Lumpur"
         if not tz_name:
             return None, None
-
+        
         now_utc = datetime.now(dt_timezone.utc)
         try:
             tz_obj = ZoneInfo(tz_name)
         except Exception:
             return tz_name, None
-
+        
         now_local = now_utc.astimezone(tz_obj)
         return tz_name, now_local
     except Exception:
@@ -309,7 +342,7 @@ def get_browser_coords():
     """Request browser geolocation via JS and return {'lat','lon','accuracy'} if available."""
     if streamlit_js_eval is None:
         return None
-
+    
     js = """
     async () => {
         if (!('geolocation' in navigator)) return { error: 'unsupported' };
@@ -330,7 +363,6 @@ def get_browser_coords():
         }
     }
     """
-    
     res = streamlit_js_eval(js_expressions=js, key="get_geo_on_load")
     if isinstance(res, dict) and "lat" in res:
         return {"lat": res["lat"], "lon": res["lon"], "accuracy": res.get("accuracy")}
@@ -341,18 +373,18 @@ def reverse_to_city_town(lat: float, lon: float) -> Dict[str, Optional[str]]:
     """Reverse geocode lat/lon to city/town using Nominatim (OpenStreetMap)."""
     if Nominatim is None:
         return {}
-
+    
     geolocator = Nominatim(user_agent="makanapa-app/1.0 (contact@example.com)")
     loc = geolocator.reverse((lat, lon), language="en", zoom=14, addressdetails=True, exactly_one=True)
     if not loc:
         return {}
-
+    
     addr = (loc.raw or {}).get("address", {})
     city = addr.get("city") or addr.get("town") or addr.get("village") or addr.get("municipality")
     suburb = addr.get("suburb") or addr.get("neighbourhood")
     state = addr.get("state")
     country = addr.get("country")
-
+    
     return {"city": city, "suburb": suburb, "state": state, "country": country, "addr": addr}
 
 # Context-aware rating weight function
@@ -361,15 +393,19 @@ def get_dynamic_rating_weight(context: Dict) -> float:
     # Higher rating weight for special occasions
     if context.get("mood") in ["celebration", "date", "business", "special occasion"]:
         return 0.5
+    
     # Lower rating weight for budget-conscious users
     if context.get("budget") in ["cheap", "budget"]:
         return 0.2
+    
     # Higher weight for tourists/first-time visitors
     if "first time" in str(context.get("user_notes", "")).lower():
         return 0.4
+    
     # Higher weight for family dining
     if context.get("group_size") in ["family", "group"]:
         return 0.35
+    
     # Default moderate weight
     return 0.3
 
@@ -407,7 +443,7 @@ def apply_quality_first_search(user_input, context, min_rating: float = 4.0):
         # Stage 1: Try to get high-rated results by getting more results and filtering
         initial_results = vectorizer.search(
             query=enhanced_query,
-            n_results=15,  # Get more results to filter
+            n_results=15, # Get more results to filter
             include_distances=True
         )
         
@@ -447,21 +483,21 @@ def extract_context_from_message(user_input, current_context):
         
         if not response_text.strip():
             return current_context
-            
+        
         cleaned_response = clean_json_response(response_text)
         extracted = json.loads(cleaned_response)
         
         # Validate extracted data
         if not isinstance(extracted, dict):
             return current_context
-            
+        
         updated_context = current_context.copy()
         for key, value in extracted.items():
             if value and key in updated_context:
                 updated_context[key] = value
-                
-        return updated_context
         
+        return updated_context
+    
     except json.JSONDecodeError as e:
         st.warning(f"JSON parsing error: {e}")
         return current_context
@@ -489,7 +525,7 @@ def analyze_context_completeness(user_input, context, chat_history):
                 "ready_for_recommendation": True,
                 "confidence_level": "medium"
             }
-            
+        
         cleaned_response = clean_json_response(response_text)
         analysis = json.loads(cleaned_response)
         
@@ -498,9 +534,9 @@ def analyze_context_completeness(user_input, context, chat_history):
         for field in required_fields:
             if field not in analysis:
                 analysis[field] = False
-                
-        return analysis
         
+        return analysis
+    
     except json.JSONDecodeError as e:
         st.warning(f"JSON parsing error in analysis: {e}")
         return {
@@ -546,7 +582,6 @@ async def get_food_recommendation_with_mcp(user_input, context, chat_history):
                         "meal_time": context.get("meal_type", "lunch")
                     }
                 )
-                
                 if weather_result and "error" not in str(weather_result):
                     # Parse JSON response if it's a string
                     if isinstance(weather_result, str):
@@ -573,7 +608,6 @@ async def get_food_recommendation_with_mcp(user_input, context, chat_history):
                     "get_local_events",
                     {"location": context["location"]}
                 )
-                
                 if events_result and "error" not in str(events_result):
                     # Parse JSON response if it's a string
                     if isinstance(events_result, str):
@@ -593,15 +627,15 @@ async def get_food_recommendation_with_mcp(user_input, context, chat_history):
                 context.get("meal_type", "lunch")
             )
             enhanced_context["events"] = get_mock_events_data(context["location"])
-
+    
     # Use existing search logic with enhanced context
     try:
         context_str = ", ".join([f"{k}: {v}" for k, v in enhanced_context.items() if v])
         enhanced_query = f"{user_input}. Context: {context_str}"
-
+        
         # Get search configuration from session state
         search_config = st.session_state.get('search_config', {"method": "hybrid", "rating_weight": 0.3})
-
+        
         # Apply different search strategies based on configuration
         if search_config["method"] == "quality":
             search_results = apply_quality_first_search(
@@ -624,32 +658,42 @@ async def get_food_recommendation_with_mcp(user_input, context, chat_history):
             )
             rating_weight = search_config.get("rating_weight", get_dynamic_rating_weight(enhanced_context))
             search_results = apply_hybrid_scoring(initial_results, rating_weight, n_results=5)
+        
+        # **FIXED: Create a cleaner prompt that focuses on generating only the response**
+        recommendation_prompt = f"""As MakanApa, a friendly Malaysian food discovery assistant, provide personalized food recommendations based on this information:
 
-        # Enhanced recommendation prompt with MCP data
-        recommendation_prompt = f"""
-User context: {enhanced_context}
-User request: {user_input}
-Chat history: {chat_history[-3:] if len(chat_history) > 3 else chat_history}
-Restaurant search results: {search_results}
+User's request: {user_input}
+Current context: {json.dumps(enhanced_context, indent=2)}
+Recent conversation: {chat_history[-2:] if len(chat_history) > 2 else chat_history}
 
-{SYSTEM_PROMPT}
+Restaurant options found:
+{json.dumps(search_results, indent=2)}
 
-Based on the context (including weather and local events), restaurant data,
-and user preferences, provide specific, actionable food recommendations.
-Consider how weather and events might affect the dining experience.
-Include restaurant names, dish suggestions, and why they match the user's needs.
-Be conversational and use Malaysian terms naturally.
-"""
+Instructions:
+- Write ONLY your response as MakanApa, nothing else
+- Be conversational and warm like a local friend
+- Use Malaysian food terms naturally (makan, tapau, shiok, etc.)
+- Suggest specific restaurants and dishes from the search results
+- Consider the weather, time, and context in your recommendations
+- Keep it concise but helpful (2-3 paragraphs max)
+- End with a friendly question or suggestion
 
+Your response:"""
+
+        # Get the enhanced response
         enhanced_response = llm_enhancer.enhance_search_results(
             recommendation_prompt,
             search_results
         )
         
-        return enhanced_response.get("enhanced_summary", "Let me think of something good for you!")
-
+        # **FIXED: Clean the response to remove any prompt remnants**
+        response_text = enhanced_response.get("enhanced_summary", "Let me think of something good for you!")
+        cleaned_response = clean_recommendation_response(response_text)
+        
+        return cleaned_response
+        
     except Exception as e:
-        return f"Aiya! Having some trouble with my recommendations. Error: {str(e)}"
+        return f"Aiya! Something went wrong with my food brain 🤯 Can you try asking me again? Error: {str(e)}"
 
 # Debug functions
 def debug_search_issues():
@@ -663,11 +707,10 @@ def debug_search_issues():
         if count == 0:
             st.error("Vector database is empty! You need to load restaurant data first.")
             return False
-            
+        
         # Test a simple search
         test_results = vectorizer.search("food", n_results=3)
         st.write(f"Test search returned {len(test_results)} results")
-        
         return True
         
     except Exception as e:
@@ -746,7 +789,7 @@ if not st.session_state.did_reverse_geo:
             else:
                 label = place.get("city") or place.get("state") or None
             st.session_state.user_context["location_label"] = label
-        st.session_state.did_reverse_geo = True
+    st.session_state.did_reverse_geo = True
 
 # Display chat messages from history
 for message in st.session_state.messages:
@@ -765,22 +808,22 @@ with st.sidebar:
                 context_items.append(f"**{title}**: {display}")
             else:
                 context_items.append(f"**{title}**: {value}")
-
+    
     if context_items:
         for item in context_items:
             st.markdown(f"- {item}")
     else:
         st.markdown("*Tell me more about your makan situation!*")
-
+    
     # Reset context button
     if st.button("🔄 Reset My Info"):
         base = st.session_state.user_context
         st.session_state.user_context = {k: None for k in base}
         st.session_state.did_reverse_geo = False
         st.rerun()
-
+    
     st.markdown("---")
-
+    
     # MCP Servers Status
     st.markdown("### 🔌 MCP Servers")
     if st.session_state.mcp_connected and st.session_state.mcp_manager:
@@ -788,7 +831,6 @@ with st.sidebar:
         for name, server_info in st.session_state.mcp_manager.servers.items():
             tools_count = len(server_info.get("tools", {}))
             st.markdown(f"**{name}**: {tools_count} tools")
-            
             # Show available tools in expander
             if tools_count > 0:
                 with st.expander(f"Show {name} tools"):
@@ -810,12 +852,11 @@ with st.sidebar:
             st.warning("MCP not available")
             st.caption("Install with: `pip install mcp fastmcp httpx`")
             st.info("Using mock weather/events data")
-
+    
     st.markdown("---")
-
+    
     # Debug Mode
     debug_mode = st.checkbox("🐛 Debug Mode")
-
     if debug_mode:
         st.markdown("### Debug Info")
         st.json(st.session_state.user_context)
@@ -823,13 +864,13 @@ with st.sidebar:
         if st.session_state.messages:
             last_msg = st.session_state.messages[-1]
             st.write("Last message:", last_msg)
-            
+        
         if st.button("🔍 Debug Database"):
             debug_search_issues()
-            
+        
         if st.button("Test LLM"):
             test_llm_enhancer()
-
+    
     # Search method configuration
     st.markdown("### ⚙️ Search Settings")
     search_method = st.selectbox(
@@ -837,7 +878,7 @@ with st.sidebar:
         ["Smart Hybrid", "Quality First", "Pure Semantic"],
         help="Smart Hybrid balances relevance and ratings. Quality First prioritizes highly-rated places. Pure Semantic focuses only on text similarity."
     )
-
+    
     if search_method == "Smart Hybrid":
         rating_importance = st.slider(
             "Rating Importance",
@@ -846,10 +887,9 @@ with st.sidebar:
             0.1,
             help="Higher values prioritize highly-rated restaurants"
         )
-        
         st.session_state.search_config = {"method": "hybrid", "rating_weight": rating_importance}
         st.caption(f"Current weight: {rating_importance:.1f} (0=semantic only, 1=rating only)")
-        
+    
     elif search_method == "Quality First":
         min_rating = st.slider(
             "Minimum Rating",
@@ -858,16 +898,15 @@ with st.sidebar:
             0.1,
             help="Minimum rating threshold for initial search"
         )
-        
         st.session_state.search_config = {"method": "quality", "min_rating": min_rating}
         st.caption(f"Will prioritize restaurants with {min_rating:.1f}+ stars")
-        
+    
     else:
         st.session_state.search_config = {"method": "semantic"}
         st.caption("Pure semantic search - only text similarity matters")
-
+    
     st.markdown("---")
-
+    
     # Quick Starters
     st.markdown("### 💡 Quick Starters")
     starter_prompts = [
@@ -878,14 +917,14 @@ with st.sidebar:
         "I want comfort food for a rainy day",
         "Quick snack near Georgetown"
     ]
-
+    
     for prompt in starter_prompts:
         if st.button(prompt, key=f"starter_{prompt}"):
             st.session_state.messages.append({"role": "user", "content": prompt})
             st.rerun()
-
+    
     st.markdown("---")
-
+    
     # Tools section
     st.markdown("### 🛠️ Tools")
     if st.button("Clear Chat History"):
@@ -893,14 +932,14 @@ with st.sidebar:
             {"role": "assistant", "content": "Fresh start! What are you looking to makan today? 🍽️"}
         ]
         st.rerun()
-
+    
     if st.button("Show DB Stats"):
         stats = vectorizer.get_database_stats()
         if isinstance(stats, dict) and "error" in stats:
             st.error(stats["error"])
         else:
             st.json(stats)
-
+    
     # Show current search method
     current_method = st.session_state.search_config["method"]
     if current_method == "hybrid":
@@ -911,7 +950,7 @@ with st.sidebar:
         st.caption(f"🔍 Using Quality-First Search (Min: {min_rating:.1f}⭐)")
     else:
         st.caption("🔍 Using Pure Semantic Search")
-
+    
     # Small hint if optional deps missing
     if streamlit_js_eval is None:
         st.caption("💡 Tip: `pip install streamlit_js_eval` for auto location detection")
@@ -924,10 +963,10 @@ if user_input := st.chat_input("Tell me about your makan situation..."):
     st.session_state.user_context = extract_context_from_message(
         user_input, st.session_state.user_context
     )
-
+    
     with st.chat_message("user"):
         st.markdown(user_input)
-
+    
     with st.chat_message("assistant"):
         with st.spinner("Checking weather, events, and makan options..."):
             try:
@@ -936,7 +975,7 @@ if user_input := st.chat_input("Tell me about your makan situation..."):
                     st.session_state.user_context,
                     st.session_state.messages
                 )
-
+                
                 if analysis.get("needs_more_context", False):
                     response_text = analysis.get(
                         "follow_up_question",
@@ -949,7 +988,7 @@ if user_input := st.chat_input("Tell me about your makan situation..."):
                         st.session_state.user_context,
                         st.session_state.messages
                     ))
-
+                
                 # Stream response
                 response_placeholder = st.empty()
                 full_response = ""
@@ -957,10 +996,10 @@ if user_input := st.chat_input("Tell me about your makan situation..."):
                     full_response += chunk + " "
                     response_placeholder.markdown(full_response + "▌")
                     time.sleep(0.02)
-
+                
                 response_placeholder.markdown(full_response)
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
-
+                
             except Exception as e:
                 error_response = f"Aiya! Something went wrong with my food brain 🤯 Can you try asking me again? Error: {str(e)}"
                 st.error(error_response)
