@@ -288,3 +288,10 @@ lerna-debug.log*
 # Temporary folders
 tmp/
 temp/
+
+# ChromaDB files and directories
+restaurant_chroma_db/
+backend/restaurant_chroma_db/
+*.sqlite3
+*.bin
+*.pickle
